@@ -3,8 +3,8 @@
 #include <ArduinoJson.h>      // Library untuk parsing/membuat JSON
 
 // Ganti dengan kredensial Wi-Fi Anda
-const char* ssid = "Go Green";
-const char* password = "suamiku123";
+const char* ssid = "";
+const char* password = "";
 
 // Ganti dengan alamat IP server Node.js Anda
 const char* websocket_server_ip = "192.168.130.45";
