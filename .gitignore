@@ -1,3 +1,9 @@
 microskop-portable-backend/.env
 microskop-portable-frontend/.env
 **/.env
+
+# Ignore node_modules di seluruh project
+**/node_modules/
+
+# Ignore build output
+**/dist/

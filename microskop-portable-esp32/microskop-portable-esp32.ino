@@ -79,9 +79,9 @@ FilterType currentFilter = LOW_PASS;
 
 // Low-Pass Filter Coefficients 
 // TUNING SENSITIVITY
-float alphaZoom = 0.5;
-float alphaPan = 0.5;
-float alphaTilt = 0.5;
+float alphaZoom = 0.7;
+float alphaPan = 0.75;
+float alphaTilt = 0.7;
 
 // Global variables to hold the current state
 float currentZoomLevel = 1.0;
