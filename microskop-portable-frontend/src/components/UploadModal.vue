@@ -1,10 +1,36 @@
 <script setup>
 import { ref } from "vue";
-import axios from "axios";
+import { createClient } from "@supabase/supabase-js";
+
+// Konfigurasi Supabase
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const staticEmail = import.meta.env.VITE_SUPABASE_STATIC_EMAIL;
+const staticPassword = import.meta.env.VITE_SUPABASE_STATIC_PASSWORD;
+
+// Fungsi login otomatis menggunakan email & password dari .env
+const loginWithStaticCredentials = async () => {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: staticEmail,
+    password: staticPassword,
+  });
+
+  if (error) {
+    console.error("Gagal login Supabase:", error.message);
+    throw new Error("Login gagal, cek kredensial di .env");
+  }
+
+  return data.user;
+};
+
+// Nama tabel untuk menyimpan metadata gambar
+const IMAGE_METADATA_TABLE = "image_metadata";
 
 const props = defineProps({
   isOpen: Boolean,
-  isLoading: Boolean, // Ini akan dikendalikan oleh komponen induk melalui emit
+  isLoading: Boolean,
 });
 
 const emit = defineEmits(["close", "upload-loading", "upload-success"]);
@@ -26,7 +52,15 @@ const triggerFileInput = () => {
   }
 };
 
-// Handle upload gambar ke backend
+// Generate unique filename untuk mencegah overwrite file dengan nama yang sama
+const generateUniqueFileName = (file) => {
+  const timestamp = new Date().getTime();
+  const randomString = Math.random().toString(36).substring(2, 10);
+  const extension = file.name.split(".").pop();
+  return `${timestamp}-${randomString}.${extension}`;
+};
+
+// Handle upload gambar langsung ke Supabase Storage
 const handleFileChange = async (event) => {
   const files = event.target.files;
   if (!files.length) return;
@@ -34,27 +68,86 @@ const handleFileChange = async (event) => {
   emit("upload-loading", true); // Set loading state di komponen induk
   uploadError.value = null; // Bersihkan error
 
-  const file = files[0]; // Hanya ambil file pertama karena backend kita menerima single image
+  const file = files[0]; // Hanya ambil file pertama
 
-  // Buat FormData untuk mengirim file
-  const formData = new FormData();
-  // Sesuaikan nama field dengan yang diharapkan oleh Multer di backend ('image')
-  formData.append("image", file);
+  // Validasi ukuran file (max 10MB)
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB dalam bytes
+  if (file.size > MAX_FILE_SIZE) {
+    uploadError.value = `File terlalu besar. Maksimal ukuran file adalah 10MB.`;
+    emit("upload-loading", false);
+    return;
+  }
 
-  // URL endpoint upload di backend Anda
-  const backendUploadUrl = "http://localhost:3000/api/images/upload"; // Sesuaikan dengan URL backend Anda
+  // Validasi tipe file
+  const allowedTypes = ["image/jpeg", "image/png", "image/jpg"];
+  if (!allowedTypes.includes(file.type)) {
+    uploadError.value = `Tipe file tidak didukung. Hanya PNG, JPG, dan JPEG yang diizinkan.`;
+    emit("upload-loading", false);
+    return;
+  }
+
+  // Generate nama file unik untuk mencegah konflik nama
+  const uniqueFileName = generateUniqueFileName(file);
+  const filePath = `public/${uniqueFileName}`;
 
   try {
-    // Kirim file ke backend untuk diupload ke Cloudinary
-    const response = await axios.post(backendUploadUrl, formData, {
-      headers: {},
-    });
+    const dataUser = await loginWithStaticCredentials();
 
-    const uploadedImageData = response.data.image; // Backend mengembalikan { message, image: {...} }
-    console.log(
-      "Upload berhasil ke backend dan Cloudinary:",
-      uploadedImageData
-    );
+    // Upload file ke bucket 'images' di Supabase Storage
+    const { data, error } = await supabase.storage
+      .from("images")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (error) {
+      console.error("Upload error:", error);
+    }
+    if (error) throw error;
+
+    // Dapatkan URL publik dari file yang diunggah
+    const { data: publicURLData } = supabase.storage
+      .from("images")
+      .getPublicUrl(filePath);
+
+    const publicUrl = publicURLData.publicUrl;
+
+    // Simpan metadata gambar ke tabel database
+    const imageMetadata = {
+      original_filename: file.name,
+      storage_path: filePath,
+      public_url: publicUrl,
+      file_size: file.size,
+      mime_type: file.type,
+      created_at: new Date().toISOString(), // Timestamp saat upload
+      user_id: dataUser?.id,
+    };
+
+    // Insert metadata ke tabel Supabase
+    const { data: metadataData, error: metadataError } = await supabase
+      .from(IMAGE_METADATA_TABLE)
+      .insert([imageMetadata])
+      .select();
+
+    if (metadataError) {
+      console.error(
+        "Berhasil upload gambar tetapi gagal menyimpan metadata:",
+        metadataError
+      );
+      // Tidak throw error karena upload gambar sudah berhasil
+    }
+
+    // Tambahkan id dari database jika insert metadata berhasil
+    const uploadedImageData = {
+      id: metadataData?.[0]?.id, // ID dari database jika berhasil disimpan
+      url: publicUrl,
+      path: filePath,
+      filename: uniqueFileName,
+      originalFilename: file.name,
+      size: file.size,
+      mimetype: file.type,
+    };
 
     // Emit success event ke komponen induk, sertakan data gambar yang diupload
     emit("upload-success", uploadedImageData);
@@ -65,13 +158,12 @@ const handleFileChange = async (event) => {
     }
   } catch (error) {
     console.error(
-      "Gagal mengupload gambar via backend:",
-      error.response ? error.response.data : error.message || error
+      "Gagal mengupload gambar ke Supabase:",
+      error.message || error
     );
-    // Tampilkan pesan error dari backend jika tersedia
-    uploadError.value =
-      error.response?.data?.message ||
-      `Gagal mengupload "${file.name}". Silakan coba lagi.`;
+    uploadError.value = `Gagal mengupload "${file.name}". ${
+      error.message || "Silakan coba lagi."
+    }`;
   } finally {
     emit("upload-loading", false); // Sembunyikan loading di komponen induk
   }

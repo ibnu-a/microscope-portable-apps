@@ -1,6 +1,4 @@
 <script setup>
-import { defineEmits } from "vue";
-
 const emit = defineEmits(["image-click"]);
 
 const props = defineProps({
@@ -28,18 +26,19 @@ const showImageViewer = (image) => {
     >
       <div class="relative pb-[75%] overflow-hidden bg-gray-100">
         <img
-          :src="image.src"
-          :alt="image.name"
+          :src="image.public_url"
+          :alt="image.original_filename"
           class="absolute inset-0 w-full h-full object-cover hover:scale-105 transition-transform duration-300"
         />
         <div
           class="absolute inset-0 bg-black opacity-0 hover:opacity-10 transition-opacity duration-300"
         ></div>
       </div>
-      <!-- <div class="p-4">
-        <h3 class="font-medium text-gray-800 truncate">{{ image.name }}</h3>
-        <p class="text-xs text-gray-500 mt-1">{{ image.date }}</p>
-      </div> -->
+      <div class="p-4">
+        <h3 class="font-medium text-gray-800 truncate">
+          {{ image.original_filename }}
+        </h3>
+      </div>
     </div>
   </div>
 </template>

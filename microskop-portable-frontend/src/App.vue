@@ -1,67 +1,202 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import UploadModal from "./components/UploadModal.vue";
 import ImageViewer from "./components/ImageViewer.vue";
-import axios from "axios";
+import { createClient } from "@supabase/supabase-js";
+import { io } from "socket.io-client";
 
-// Data gambar
+// --- Supabase Configuration ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// --- Data Gambar ---
 const images = ref([]);
 const isModalOpen = ref(false);
 const isImageViewerOpen = ref(false);
-const currentImage = ref(null);
+const currentImage = ref(null); // Objek gambar yang sedang dilihat
 const isLoading = ref(false);
+const currentImageIndex = ref(0); // Indeks gambar yang sedang aktif
+
+// --- Socket.IO State ---
+const connectionStatus = ref("Connecting...");
+const microscopeData = ref({
+  zoomLevel: 1.0,
+  panPosition: 0.0,
+  tiltPosition: 0.0, // STATE BARU: Posisi pergeseran vertikal
+  zoomPercentage: 0,
+  panPercentage: 0,
+  tiltPercentage: 0, // STATE BARU: Persentase pergeseran vertikal
+});
+let socket = null;
 
 // Fungsi untuk mengambil gambar dari server
 const fetchImages = async () => {
   try {
-    const response = await axios.get("http://localhost:3000/api/images");
-    images.value = response.data;
+    isLoading.value = true;
+    const { data, error } = await supabase
+      .from("image_metadata")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Gagal fetch dari image_metadata:", error.message);
+      return;
+    }
+
+    images.value = data;
+    console.log("Fetched Images with Public URLs:", images.value);
+
+    if (images.value.length > 0) {
+      currentImage.value = images.value[currentImageIndex.value];
+    }
   } catch (err) {
-    console.error("Failed to fetch images:", err);
+    console.error("Terjadi error:", err);
+  } finally {
+    isLoading.value = false;
   }
 };
 
-onMounted(async () => {
-  isLoading.value = true;
-  await fetchImages();
-  isLoading.value = false;
-});
+// --- Socket.IO connection and event listener setup ---
+const setupSocketIOListerners = () => {
+  const BACKEND_URL = "http://192.168.125.45:3000"; // SESUAIKAN IP INI!
 
-// Handle membuka modal upload
+  if (socket) {
+    socket.disconnect();
+  }
+
+  socket = io(BACKEND_URL);
+
+  socket.on("connect", () => {
+    console.log("Connected to Socket.IO server from Parent");
+    connectionStatus.value = "Connected";
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Disconnected from Socket.IO server from Parent");
+    connectionStatus.value = "Connection Error";
+    scheduleReconnect();
+  });
+
+  socket.on("connect_error", (err) => {
+    console.error("Socket.IO connection error from Parent:", err.message);
+    connectionStatus.value = "Connection Error";
+    scheduleReconnect();
+  });
+
+  // Listener untuk event 'potentiometerUpdate' (sekarang termasuk tilt)
+  socket.on("potentiometerUpdate", (data) => {
+    // console.log("Received pot. update in Parent:", data);
+    microscopeData.value.zoomLevel = data.zoomLevel;
+    microscopeData.value.panPosition = data.panPosition;
+    microscopeData.value.tiltPosition = data.tiltPosition; // UPDATE PROPERTI BARU
+    microscopeData.value.zoomPercentage = data.zoomPercentage;
+    microscopeData.value.panPercentage = data.panPercentage;
+    microscopeData.value.tiltPercentage = data.tiltPercentage; // UPDATE PROPERTI BARU
+  });
+
+  // Listener untuk event 'imageNavigation' (dari rotary encoder)
+  socket.on("imageNavigation", (data) => {
+    console.log("Received image navigation action in Parent:", data.action);
+    if (data.action === "next") {
+      nextImage();
+    } else if (data.action === "previous") {
+      prevImage();
+    }
+  });
+};
+
+const closeSocketIOListeners = () => {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+};
+
+const scheduleReconnect = () => {
+  setTimeout(() => {
+    if (!socket?.connected) {
+      console.log("Attempting to reconnect Socket.IO from Parent...");
+      connectionStatus.value = "Connecting...";
+      setupSocketIOListerners();
+    }
+  }, 5000);
+};
+
+// --- Fungsi Navigasi Gambar (Tidak Berubah) ---
+const nextImage = () => {
+  if (images.value.length === 0) return;
+  currentImageIndex.value = (currentImageIndex.value + 1) % images.value.length;
+  currentImage.value = images.value[currentImageIndex.value];
+};
+
+const prevImage = () => {
+  if (images.value.length === 0) return;
+  currentImageIndex.value =
+    (currentImageIndex.value - 1 + images.value.length) % images.value.length;
+  if (currentImageIndex.value < 0) {
+    currentImageIndex.value = images.value.length - 1;
+  }
+  currentImage.value = images.value[currentImageIndex.value];
+};
+
+// --- Handle Modal dan Viewer (Tidak Berubah) ---
 const openUploadModal = () => {
   isModalOpen.value = true;
 };
 
-// Handle menutup modal
 const closeModal = () => {
   isModalOpen.value = false;
 };
 
-// Buka image viewer dengan gambar yang dipilih
 const openImageViewer = (image) => {
   currentImage.value = image;
+  const index = images.value.findIndex((img) => img.id === image.id);
+  if (index !== -1) {
+    currentImageIndex.value = index;
+  }
   isImageViewerOpen.value = true;
 };
 
-// Tutup image viewer
 const closeImageViewer = () => {
   isImageViewerOpen.value = false;
-  setTimeout(() => {
-    currentImage.value = null;
-  }, 300); // Menunggu animasi selesai
 };
 
-// Handle ketika upload berhasil
 const handleUploadSuccess = async () => {
   await fetchImages();
   closeModal();
 };
 
-// Handle loading state
 const handleUploadLoading = (loading) => {
   isLoading.value = loading;
 };
+
+// --- Lifecycle Hooks ---
+onMounted(async () => {
+  await fetchImages();
+  setupSocketIOListerners();
+});
+
+onUnmounted(() => {
+  closeSocketIOListeners();
+});
+
+watch(
+  currentImageIndex,
+  (newIndex) => {
+    if (
+      images.value.length > 0 &&
+      newIndex >= 0 &&
+      newIndex < images.value.length
+    ) {
+      currentImage.value = images.value[newIndex];
+    } else {
+      currentImage.value = null;
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -101,7 +236,7 @@ const handleUploadLoading = (loading) => {
 
     <main class="container mx-auto px-4 pb-8">
       <div
-        v-if="images.length === 0"
+        v-if="images.length === 0 && !isLoading"
         class="flex flex-col items-center justify-center p-8 text-center"
       >
         <svg
@@ -146,10 +281,19 @@ const handleUploadLoading = (loading) => {
         </button>
       </div>
 
+      <div
+        v-else-if="isLoading"
+        class="flex items-center justify-center text-gray-700 p-8"
+      >
+        <div
+          class="animate-spin rounded-full h-8 w-8 border-4 border-teal-500 border-t-transparent mr-3"
+        ></div>
+        <span>Memuat gambar...</span>
+      </div>
+
       <ImageGrid v-else :images="images" @image-click="openImageViewer" />
     </main>
 
-    <!-- Komponen Modal Upload -->
     <UploadModal
       :is-open="isModalOpen"
       :is-loading="isLoading"
@@ -158,10 +302,13 @@ const handleUploadLoading = (loading) => {
       @upload-loading="handleUploadLoading"
     />
 
-    <!-- Komponen Image Viewer -->
     <ImageViewer
       :is-open="isImageViewerOpen"
       :current-image="currentImage"
+      :current-image-index="currentImageIndex"
+      :total-images="images.length"
+      :microscope-data="microscopeData"
+      :connection-status="connectionStatus"
       @close="closeImageViewer"
     />
   </div>
