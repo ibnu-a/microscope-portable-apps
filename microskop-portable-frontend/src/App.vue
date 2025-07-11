@@ -1,10 +1,12 @@
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from "vue";
+import { createClient } from "@supabase/supabase-js";
+import { io } from "socket.io-client";
+
 import ImageGrid from "./components/ImageGrid.vue";
 import UploadModal from "./components/UploadModal.vue";
 import ImageViewer from "./components/ImageViewer.vue";
-import { createClient } from "@supabase/supabase-js";
-import { io } from "socket.io-client";
+import DeleteConfirmationModal from "./components/DeleteConfirmationModal.vue";
 
 // --- Supabase Configuration ---
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -15,19 +17,23 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const images = ref([]);
 const isModalOpen = ref(false);
 const isImageViewerOpen = ref(false);
-const currentImage = ref(null); // Objek gambar yang sedang dilihat
+const currentImage = ref(null);
 const isLoading = ref(false);
-const currentImageIndex = ref(0); // Indeks gambar yang sedang aktif
+const currentImageIndex = ref(0);
+
+const isDeleteModalOpen = ref(false);
+const imageToDelete = ref(null);
+const isDeleting = ref(false);
 
 // --- Socket.IO State ---
 const connectionStatus = ref("Connecting...");
 const microscopeData = ref({
   zoomLevel: 1.0,
   panPosition: 0.0,
-  tiltPosition: 0.0, // STATE BARU: Posisi pergeseran vertikal
+  tiltPosition: 0.0,
   zoomPercentage: 0,
   panPercentage: 0,
-  tiltPercentage: 0, // STATE BARU: Persentase pergeseran vertikal
+  tiltPercentage: 0,
 });
 let socket = null;
 
@@ -41,12 +47,10 @@ const fetchImages = async () => {
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error("Gagal fetch dari image_metadata:", error.message);
       return;
     }
 
     images.value = data;
-    console.log("Fetched Images with Public URLs:", images.value);
 
     if (images.value.length > 0) {
       currentImage.value = images.value[currentImageIndex.value];
@@ -60,7 +64,7 @@ const fetchImages = async () => {
 
 // --- Socket.IO connection and event listener setup ---
 const setupSocketIOListerners = () => {
-  const BACKEND_URL = "http://192.168.125.45:3000"; // SESUAIKAN IP INI!
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 
   if (socket) {
     socket.disconnect();
@@ -87,18 +91,16 @@ const setupSocketIOListerners = () => {
 
   // Listener untuk event 'potentiometerUpdate' (sekarang termasuk tilt)
   socket.on("potentiometerUpdate", (data) => {
-    // console.log("Received pot. update in Parent:", data);
     microscopeData.value.zoomLevel = data.zoomLevel;
     microscopeData.value.panPosition = data.panPosition;
-    microscopeData.value.tiltPosition = data.tiltPosition; // UPDATE PROPERTI BARU
+    microscopeData.value.tiltPosition = data.tiltPosition;
     microscopeData.value.zoomPercentage = data.zoomPercentage;
     microscopeData.value.panPercentage = data.panPercentage;
-    microscopeData.value.tiltPercentage = data.tiltPercentage; // UPDATE PROPERTI BARU
+    microscopeData.value.tiltPercentage = data.tiltPercentage;
   });
 
   // Listener untuk event 'imageNavigation' (dari rotary encoder)
   socket.on("imageNavigation", (data) => {
-    console.log("Received image navigation action in Parent:", data.action);
     if (data.action === "next") {
       nextImage();
     } else if (data.action === "previous") {
@@ -117,7 +119,6 @@ const closeSocketIOListeners = () => {
 const scheduleReconnect = () => {
   setTimeout(() => {
     if (!socket?.connected) {
-      console.log("Attempting to reconnect Socket.IO from Parent...");
       connectionStatus.value = "Connecting...";
       setupSocketIOListerners();
     }
@@ -170,6 +171,51 @@ const handleUploadSuccess = async () => {
 
 const handleUploadLoading = (loading) => {
   isLoading.value = loading;
+};
+
+// --- Fungsi untuk Penghapusan Gambar ---
+const handleDeleteImage = (image) => {
+  imageToDelete.value = image;
+  isDeleteModalOpen.value = true;
+};
+
+const confirmDeleteAction = async () => {
+  if (!imageToDelete.value) return;
+
+  isDeleting.value = true;
+  try {
+    const { data: storageData, error: storageError } = await supabase.storage
+      .from("images")
+      .remove([imageToDelete.value.storage_path]);
+
+    if (storageError) {
+      alert("Failed to delete image file. Please try again.");
+      return;
+    }
+
+    const { error: dbError } = await supabase
+      .from("image_metadata")
+      .delete()
+      .eq("id", imageToDelete.value.id);
+
+    if (dbError) {
+      alert("Failed to delete image metadata. Please try again.");
+      return;
+    }
+
+    await fetchImages();
+    closeDeleteModal();
+  } catch (error) {
+    alert("An unexpected error occurred during deletion.");
+  } finally {
+    isDeleting.value = false;
+    imageToDelete.value = null;
+  }
+};
+
+const closeDeleteModal = () => {
+  isDeleteModalOpen.value = false;
+  imageToDelete.value = null;
 };
 
 // --- Lifecycle Hooks ---
@@ -291,7 +337,12 @@ watch(
         <span>Memuat gambar...</span>
       </div>
 
-      <ImageGrid v-else :images="images" @image-click="openImageViewer" />
+      <ImageGrid
+        v-else
+        :images="images"
+        @image-click="openImageViewer"
+        @delete-image="handleDeleteImage"
+      />
     </main>
 
     <UploadModal
@@ -310,6 +361,14 @@ watch(
       :microscope-data="microscopeData"
       :connection-status="connectionStatus"
       @close="closeImageViewer"
+    />
+
+    <DeleteConfirmationModal
+      :is-open="isDeleteModalOpen"
+      :image-name="imageToDelete ? imageToDelete.original_filename : ''"
+      :is-loading="isDeleting"
+      @confirm="confirmDeleteAction"
+      @cancel="closeDeleteModal"
     />
   </div>
 </template>

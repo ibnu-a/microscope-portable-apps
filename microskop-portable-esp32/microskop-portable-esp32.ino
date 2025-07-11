@@ -7,25 +7,28 @@ const char* ssid = "Den den mushi";
 const char* password = "1sampai9";
 
 // Backend Server Configuration
-const char* backendHost = "192.168.125.45"; // Ganti dengan IP Address mesin yang menjalankan backend Node.js Anda
+const char* backendHost = "192.168.53.45"; // Ganti dengan IP Address mesin yang menjalankan backend Node.js Anda
 const int backendPort = 3000;
 const char* sensorDataPath = "/sensor-data";
+const char* imageActionPath = "/image-action";
+
+const char* API_KEY = "VE4D209rhTcgH1KNxj4YdUr0mj9eZFRgnU3DiQPjnzWAfKGTVYCAqNOj4sjfSxTqnYlPAmofSZ9VJDVG4ag0vC22xAfWSzau3sWNrjCk1zd23tiJUx0OXOMMSqgyPgeB";
 
 // Hardware Pins
-const int zoomPotPin = 34;
-const int panPotPin = 35;
+const int zoomPotPin = 34; // Potensiometer untuk pergeseran zoom-in zoom-out
+const int panPotPin = 35; // Potensiometer untuk pergeseran kanan-kiri
 const int tiltPotPin = 32; // Potensiometer untuk pergeseran atas-bawah
 const int ledPin = 2;
 
 // Rotary Encoder Pins
-const int encoderCLK = 16; // CLK pin dari Rotary Encoder
-const int encoderDT = 17;  // DT pin dari Rotary Encoder
+const int encoderCLK = 16; // CLK pin dari Rotary Encoder rx
+const int encoderDT = 17;  // DT pin dari Rotary Encoder tx
 const int encoderSW = 18;  // SW pin (button) dari Rotary Encoder
 
 // Control Variables (tidak terlalu digunakan lagi, diganti currentZoomLevel/PanPosition/TiltPosition)
-float zoomLevel = 1.0;
-float panPosition = 0.0;
-float tiltPosition = 0.0;
+// float zoomLevel = 1.0;
+// float panPosition = 0.0;
+// float tiltPosition = 0.0;
 
 // Smoothing Configuration (numReadings tidak relevan untuk LPF)
 const int numReadings = 2;
@@ -55,7 +58,6 @@ volatile int encoderPos = 0;
 volatile unsigned long lastEncoderChangeTime = 0;
 int lastEncoderCLKState;
 const unsigned long encoderDebounceDelay = 10;
-// **** PERBAIKAN: Variabel baru untuk tombol encoder ****
 unsigned long lastEncoderButtonPressTime = 0;
 const unsigned long encoderButtonDebounceDelay = 50;
 const unsigned long minEncoderSendInterval = 300;
@@ -79,9 +81,9 @@ FilterType currentFilter = LOW_PASS;
 
 // Low-Pass Filter Coefficients 
 // TUNING SENSITIVITY
-float alphaZoom = 0.7;
-float alphaPan = 0.75;
-float alphaTilt = 0.7;
+float alphaZoom = 0.6;
+float alphaPan = 0.6;
+float alphaTilt = 0.6;
 
 // Global variables to hold the current state
 float currentZoomLevel = 1.0;
@@ -254,6 +256,7 @@ void sendMicroscopeData(float zoom, float pan, float tilt, float zoomPerc, float
 
   http.begin(serverUrl);
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-API-Key", API_KEY);
 
   int httpResponseCode = http.POST(jsonPayload);
 
@@ -284,10 +287,11 @@ void sendImageNavigationAction(const char* action) {
   }
 
   HTTPClient http;
-  String serverUrl = "http://" + String(backendHost) + ":" + String(backendPort) + String("/image-action");
+  String serverUrl = "http://" + String(backendHost) + ":" + String(backendPort) + String(imageActionPath);
 
   http.begin(serverUrl);
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-API-Key", API_KEY);
 
   int httpResponseCode = http.POST(jsonPayload);
 
